@@ -1,0 +1,66 @@
+﻿:root {
+  --chassis-lead: #1C1F24;
+  --console-steel: #262B33;
+  --console-surface: #20242B;
+  --grid-boundary: #3A414D;
+  --spec-white: #E1E4EA;
+  --subsystem-muted: #8792A2;
+  --verification-cyan: #2F818E;
+  --restricted-amber: #C2782A;
+  --restricted-red: #A83838;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--chassis-lead);
+  color: var(--spec-white);
+  font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+  height: 100vh;
+  user-select: none;
+}
+
+/* Custom Industrial Monospace */
+.mono {
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.01em;
+}
+
+/* Formal Document Serif */
+.serif-doc {
+  font-family: 'Source Serif 4', Georgia, serif;
+}
+
+/* Industrial Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--chassis-lead);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--grid-boundary);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--subsystem-muted);
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  font-family: inherit;
+}
+
+input, textarea {
+  font-family: inherit;
+}

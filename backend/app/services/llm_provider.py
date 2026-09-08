@@ -1,30 +1,38 @@
 """
-Unified On-Premise LLM Provider.
-Uses local Ollama for Qwen2.5.
+Local Ollama LLM Provider.
+
+All LLM inference happens through the local Ollama server.
+
+The model is configurable so that development can use:
+    qwen2.5:3b
+
+and deployment can later use:
+    qwen3:14b
 """
 
 import requests
 from typing import Optional
+
 from app.core.config import OLLAMA_BASE_URL
 
-_OLLAMA_ALIVE = None
+
+OLLAMA_TIMEOUT = 120.0
 
 
 def is_ollama_online() -> bool:
-    global _OLLAMA_ALIVE
+    """
+    Check whether the local Ollama server is running.
+    """
 
     try:
-        resp = requests.get(
+        response = requests.get(
             f"{OLLAMA_BASE_URL}/api/version",
             timeout=2.0
         )
 
-        _OLLAMA_ALIVE = resp.status_code == 200
-        return _OLLAMA_ALIVE
+        return response.status_code == 200
 
-    except Exception as e:
-        print("Ollama connection error:", repr(e))
-        _OLLAMA_ALIVE = False
+    except requests.RequestException:
         return False
 
 
@@ -35,59 +43,47 @@ def query_local_ollama(
 ) -> Optional[str]:
 
     if not is_ollama_online():
-        print("Ollama is not running")
+        print("Ollama is not available.")
         return None
 
+    final_prompt = prompt
+
+    if system_prompt:
+        final_prompt = (
+            f"{system_prompt}\n\n"
+            f"USER REQUEST:\n{prompt}"
+        )
+
     try:
-        print("========================================")
-        print("Calling Ollama")
-        print("URL:", OLLAMA_BASE_URL)
-        print("Model:", model_name)
-        print("========================================")
-
-        # Your installed model
-        actual_model = "qwen2.5:3b"
-
-        # Combine system prompt and user prompt
-        final_prompt = prompt
-
-        if system_prompt:
-            final_prompt = (
-                f"System instructions:\n"
-                f"{system_prompt}\n\n"
-                f"User request:\n"
-                f"{prompt}"
-            )
 
         response = requests.post(
             f"{OLLAMA_BASE_URL}/api/generate",
+
             json={
-                "model": actual_model,
+                "model": model_name,
                 "prompt": final_prompt,
                 "stream": False
             },
-            timeout=120.0
+
+            timeout=OLLAMA_TIMEOUT
         )
 
-        print("Ollama HTTP status:", response.status_code)
-
         if response.status_code != 200:
-            print("Ollama error:", response.text)
+            print(
+                "Ollama error:",
+                response.status_code,
+                response.text
+            )
             return None
 
         data = response.json()
 
-        answer = data.get("response")
+        return data.get("response")
 
-        if answer:
-            print("Ollama successfully generated response.")
-            return answer
+    except requests.RequestException as exc:
 
-        print("Ollama returned no response.")
-        return None
+        print("Ollama request failed:", exc)
 
-    except Exception as e:
-        print("OLLAMA ERROR:", repr(e))
         return None
 
 
@@ -99,49 +95,88 @@ def generate_local_response(
     retrieved_chunks: list,
     user_name: str,
     clearance_tier: str,
-    system_prompt: Optional[str] = None
+    research_context: Optional[str] = None
 ) -> str:
 
-    # Ask the actual local Ollama model
-    ollama_resp = query_local_ollama(
-        query,
-        model_name,
+    context_parts = []
+
+    if retrieved_chunks:
+
+        context_parts.append(
+            "AUTHORIZED INTERNAL KNOWLEDGE:\n"
+            + "\n\n".join(
+                chunk.get("content", "")
+                for chunk in retrieved_chunks
+            )
+        )
+
+    if research_context:
+
+        context_parts.append(
+            "PUBLIC RESEARCH RESULTS:\n"
+            + research_context
+        )
+
+    context = "\n\n".join(context_parts)
+
+    system_prompt = """
+You are the local reasoning engine of the Sovereign Industrial AI Workbench.
+
+You are running locally through Ollama.
+
+Security rules:
+
+1. Never invent company information.
+2. Treat internal retrieved information as confidential.
+3. Use only authorized internal context.
+4. Public research may be used only when explicitly supplied by the
+   research agent.
+5. If current information is not supplied, do not pretend that you
+   know today's information.
+6. Clearly distinguish internal evidence from public evidence.
+7. If evidence is insufficient, say so.
+8. Do not claim that you accessed the internet unless research results
+   were actually supplied.
+9. Produce a useful, structured answer.
+"""
+
+    if context:
+
+        user_prompt = f"""
+USER:
+{query}
+
+AVAILABLE EVIDENCE:
+{context}
+
+Provide the best answer using the evidence above.
+Clearly identify important sources when possible.
+"""
+
+    else:
+
+        user_prompt = f"""
+USER:
+{query}
+
+No external research or internal documents were supplied.
+
+Answer using your model knowledge only.
+If the user asks for latest/current information, explicitly explain
+that current web evidence is required.
+"""
+
+    response = query_local_ollama(
+        prompt=user_prompt,
+        model_name=model_name,
         system_prompt=system_prompt
     )
 
-    if ollama_resp:
-        return ollama_resp
-
-    # Fallback response if Ollama is unavailable
-    if lane == "LANE_A_GENERAL":
-        return (
-            f"**[Sovereign Model: {model_name} | Lane A: General Knowledge]**\n\n"
-            f"**Analysis:**\n"
-            f"Local Ollama was unavailable, so the fallback engine was used.\n\n"
-            f"Your query was:\n\n"
-            f"{query}"
-        )
-
-    # Lane B - Company Confidential
-    if not retrieved_chunks:
-        return (
-            f"**[Sovereign Model: {model_name} | Lane B: Clearance-Gated Retrieval]**\n\n"
-            f"⚠️ **Access Restricted / No Grounding Context Found**\n\n"
-            f"No documentation matching your query could be retrieved "
-            f"at clearance tier **{clearance_tier}**."
-        )
-
-    citations = [c["citation"] for c in retrieved_chunks]
-    doc_titles = list(set(c["title"] for c in retrieved_chunks))
+    if response:
+        return response
 
     return (
-        f"**[Sovereign Model: {model_name} | Lane B: Company Confidential Grounded]**\n\n"
-        f"### Industrial Engineering Findings\n\n"
-        f"Grounding successfully established against "
-        f"**{len(retrieved_chunks)} verified internal documents**.\n\n"
-        f"**Reference Sources:**\n"
-        f"{', '.join(doc_titles)}\n\n"
-        f"**Citations:**\n"
-        f"{', '.join(citations)}\n\n"
-        f"{retrieved_chunks[0]['content']}"
+        "The local Ollama model could not be reached. "
+        "Please confirm that Ollama is running and that the configured "
+        f"model '{model_name}' is installed."
     )

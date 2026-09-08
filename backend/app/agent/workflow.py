@@ -7,6 +7,7 @@ Implements:
 4. Formal Deliverable Generation (.docx Approval Note / .xlsx)
 5. Structured Audit Logging
 """
+from app.core.config import LLM_MODEL
 import time
 from typing import Dict, Any, Optional
 from app.core.security import resolve_user, ClearanceTier
@@ -32,6 +33,9 @@ def execute_agent_pipeline(
     lane = routing["lane"]
     task_type = routing["task_type"]
     selected_model = routing["selected_model"]
+    # Actual Ollama model used for inference.
+# The router's display name is only UI metadata.
+    selected_model["ollama_model"] = LLM_MODEL
 
     audit_trace = []
     audit_trace.append({
@@ -141,14 +145,14 @@ print(f"MAWP_SAFE:{mawp_safe:.2f}_BAR;MARGIN:{safety_margin_pct:.1f}%;STATUS:ALE
 
     # Step 5: Final Response Synthesis
     llm_output = generate_local_response(
-        query=query,
-        lane=lane,
-        task_type=task_type,
-        model_name=selected_model["display_name"],
-        retrieved_chunks=retrieved_chunks,
-        user_name=user.name,
-        clearance_tier=user.clearance_tier.name
-    )
+    query=query,
+    lane=lane,
+    task_type=task_type,
+    model_name=selected_model["ollama_model"],
+    retrieved_chunks=retrieved_chunks,
+    user_name=user.name,
+    clearance_tier=user.clearance_tier.name
+)
 
     # Step 6: Zero-Egress Proof & Audit Log
     exec_time = (time.time() - start_time) * 1000.0

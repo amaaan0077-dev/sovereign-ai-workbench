@@ -35,3 +35,18 @@ DEFAULT_CLEARANCE = 1  # 1: INTERNAL, 2: CONFIDENTIAL, 3: SECRET
 
 APP_TITLE = "Sovereign Industrial AI Workbench"
 APP_VERSION = "1.0.0 (SIH Air-Gapped Edition)"
+# ---------------------------------------------------------
+# Local LLM configuration
+# ---------------------------------------------------------
+
+# Development machine:
+LLM_MODEL = os.getenv(
+    "LLM_MODEL",
+    "qwen2.5:3b"
+)
+
+# Later, on the powerful deployment machine:
+#
+# LLM_MODEL=qwen3:14b
+#
+# No application code changes will be required.

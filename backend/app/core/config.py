@@ -50,3 +50,50 @@ LLM_MODEL = os.getenv(
 # LLM_MODEL=qwen3:14b
 #
 # No application code changes will be required.
+
+# ============================================================
+# LLM CONFIGURATION
+# ============================================================
+
+LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:3b")
+
+
+# ============================================================
+# WEB RESEARCH CONFIGURATION
+# ============================================================
+
+WEB_RESEARCH_ENABLED = os.getenv(
+    "WEB_RESEARCH_ENABLED",
+    "false"
+).lower() == "true"
+
+WEB_SEARCH_PROVIDER = os.getenv(
+    "WEB_SEARCH_PROVIDER",
+    "brave"
+)
+
+BRAVE_SEARCH_API_KEY = os.getenv(
+    "BRAVE_SEARCH_API_KEY",
+    ""
+)
+
+WEB_SEARCH_URL = os.getenv(
+    "WEB_SEARCH_URL",
+    "https://api.search.brave.com/res/v1/web/search"
+)
+
+WEB_MAX_RESULTS = int(
+    os.getenv("WEB_MAX_RESULTS", "5")
+)
+
+WEB_SEARCH_TIMEOUT = float(
+    os.getenv("WEB_SEARCH_TIMEOUT", "10")
+)
+
+# Conservative security policy:
+# If a query appears to contain confidential/private
+# information, web search is blocked.
+WEB_MIXED_QUERY_POLICY = os.getenv(
+    "WEB_MIXED_QUERY_POLICY",
+    "block"
+)

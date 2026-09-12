@@ -1,407 +1,921 @@
 """
-Sovereign AI Planner / Router
+Sovereign AI Workbench - Query Router
 
-The router determines:
-1. Whether the request needs private company knowledge.
-2. Whether current/public information is required.
-3. Which specialized capabilities are required.
-4. Which local model should handle the final reasoning.
+Responsibilities:
+- Identify whether a query is general/public or company/confidential.
+- Identify the type of task.
+- Decide whether code execution is actually required.
+- Decide whether document/image processing is required.
+- Decide whether public web research is required.
+- Select the appropriate local model.
 
-IMPORTANT:
-This router does NOT send user data to the internet.
-Web research will be handled by a separate privacy-controlled agent.
+Important:
+- Mentioning Python does NOT automatically mean code execution.
+- Asking about exception handling does NOT mean sandbox execution.
+- "photo" must not match "photosynthesis".
+- Explicit code execution requests go to CODE_SANDBOX.
+- Engineering calculations go to CODE_SANDBOX.
 """
 
-import re
 from enum import Enum
-from typing import Dict, Any, Tuple, List
+from typing import Any, Dict
+import re
 
+
+# ============================================================
+# QUERY LANES
+# ============================================================
 
 class QueryLane(str, Enum):
-    LANE_A = "LANE_A_GENERAL"
-    LANE_B = "LANE_B_COMPANY_CONFIDENTIAL"
+    LANE_A_GENERAL = "LANE_A_GENERAL"
+    LANE_B_COMPANY_CONFIDENTIAL = "LANE_B_COMPANY_CONFIDENTIAL"
 
+
+# ============================================================
+# TASK TYPES
+# ============================================================
 
 class TaskType(str, Enum):
-    GENERAL_KNOWLEDGE = "general_knowledge"
-    WEB_RESEARCH = "web_research"
-    PRIVATE_RAG = "private_rag"
-    CODE_SANDBOX = "code_execution"
-    VISION_DOCUMENT = "vision_document"
-    DOCUMENT_ANALYSIS = "document_analysis"
-    DELIVERABLE_DRAFTING = "deliverable_drafting"
-    INCIDENT_ANALYSIS = "incident_analysis"
-    DATA_ANALYSIS = "data_analysis"
+    GENERAL_KNOWLEDGE = "GENERAL_KNOWLEDGE"
+    CODE_SANDBOX = "CODE_SANDBOX"
+    VISION_DOCUMENT = "VISION_DOCUMENT"
+    DELIVERABLE_DRAFTING = "DELIVERABLE_DRAFTING"
+    INCIDENT_ANALYSIS = "INCIDENT_ANALYSIS"
 
 
-# ---------------------------------------------------------
-# Model registry
-# ---------------------------------------------------------
+# ============================================================
+# MODEL REGISTRY
+# ============================================================
 
 MODEL_REGISTRY = {
 
-    "qwen2.5-3b": {
-        "name": "Qwen2.5 3B",
-        "role": "General local reasoning and development model",
-        "vram_required_gb": 3.0,
-        "status": "ACTIVE_DEVELOPMENT_MODEL"
-    },
-
     "qwen2.5-coder": {
-        "name": "Qwen2.5-Coder",
-        "role": "Coding and sandboxed calculations",
-        "vram_required_gb": 6.0,
-        "status": "CONFIGURABLE"
+        "id": "qwen2.5-coder",
+        "display_name": "Qwen2.5-Coder",
+        "role": "Coding and technical calculations",
+        "memory_gb": 5.5,
+        "status": "available",
     },
 
-    "qwen3-14b": {
-        "name": "Qwen3 14B",
-        "role": "Primary reasoning and agentic model",
-        "vram_required_gb": 9.5,
-        "status": "FUTURE_UPGRADE"
-    }
+    "qwen2.5-vl": {
+        "id": "qwen2.5-vl",
+        "display_name": "Qwen2.5-VL",
+        "role": "Vision and document understanding",
+        "memory_gb": 8.0,
+        "status": "future",
+    },
+
+    "qwen2.5-14b": {
+        "id": "qwen2.5-14b",
+        "display_name": "Qwen3 14B",
+        "role": "Advanced general reasoning",
+        "memory_gb": 10.0,
+        "status": "future",
+    },
+
+    "qwen2.5-general": {
+        "id": "qwen2.5-general",
+        "display_name": "Qwen2.5 General",
+        "role": "General knowledge and reasoning",
+        "memory_gb": 5.0,
+        "status": "available",
+    },
 }
 
 
-# ---------------------------------------------------------
-# Detection signals
-# ---------------------------------------------------------
+# ============================================================
+# CONFIDENTIAL / COMPANY TERMS
+# ============================================================
 
-INDUSTRIAL_SIGNALS = [
-    r"\bp-?102\b",
-    r"\bcd-?01\b",
-    r"\bunit-?[0-9]+\b",
-    r"\brefinery\b",
-    r"\bvibration\b",
-    r"\boverhaul\b",
-    r"\bcrack\b",
-    r"\bultrasonic\b",
-    r"\bstrategic.*crude\b",
-    r"\bisprl\b",
-    r"\bapproval\s*note\b",
-    r"\bseam\b",
-    r"\bmawp\b",
-    r"\bsop\b",
-    r"\bcavern\b",
-    r"\bpadur\b",
-    r"\bvisakhapatnam\b",
-    r"\bmangalore\b",
-    r"\bindustrial\b",
-    r"\bpsu\b",
-]
+CONFIDENTIAL_TERMS = [
 
-PRIVATE_SIGNALS = [
-    r"\bour company\b",
-    r"\binternal\b",
-    r"\bconfidential\b",
-    r"\bprivate\b",
-    r"\bcompany document\b",
-    r"\binternal document\b",
-    r"\binspection report\b",
-    r"\binternal report\b",
-    r"\bour report\b",
-    r"\bour plant\b",
-    r"\bour facility\b",
-    r"\bour data\b",
-    r"\bsop\b",
-    r"\bmaintenance report\b",
-]
+    "confidential",
+    "classified",
+    "secret",
+    "restricted",
+    "internal",
+    "private",
+    "proprietary",
 
-CURRENT_SIGNALS = [
-    r"\blatest\b",
-    r"\bcurrent\b",
-    r"\btoday\b",
-    r"\byesterday\b",
-    r"\brecent\b",
-    r"\bnewest\b",
-    r"\bthis week\b",
-    r"\bthis month\b",
-    r"\b2026\b",
-    r"\bnews\b",
-    r"\brecent developments?\b",
-    r"\bwhat changed\b",
-    r"\bcurrently\b",
-    r"\bup[- ]to[- ]date\b",
-]
+    "company data",
+    "company document",
+    "company report",
 
-CODE_SIGNALS = [
-    r"\bpython\b",
-    r"\bcode\b",
-    r"\bscript\b",
-    r"\bcalculate\b",
-    r"\bcalculation\b",
-    r"\bformula\b",
-    r"\btolerance\b",
-    r"\bfft\b",
-    r"\bverify\b",
-    r"\bprogram\b",
-    r"\balgorithm\b",
-]
+    "internal document",
+    "internal report",
 
-VISION_SIGNALS = [
-    r"\bscan(ned)?\b",
-    r"\bdrawing\b",
-    r"\bp&id\b",
-    r"\bblueprint\b",
-    r"\bimage\b",
-    r"\bphoto\b",
-    r"\bhandwritten\b",
-    r"\bdiagram\b",
-]
+    "plant report",
+    "inspection report",
+    "maintenance report",
+    "production report",
 
-DOCUMENT_SIGNALS = [
-    r"\bdocument\b",
-    r"\breport\b",
-    r"\bpdf\b",
-    r"\bdocx\b",
-    r"\bfile\b",
-    r"\binspection\b",
-    r"\banalyze.*document\b",
-]
-
-DRAFTING_SIGNALS = [
-    r"\bapproval\s*note\b",
-    r"\bmemorandum\b",
-    r"\bdraft\b",
-    r"\bword\b",
-    r"\bdocx\b",
-    r"\breport\b",
-    r"\bpresentation\b",
-    r"\bppt\b",
-    r"\bcreate.*report\b",
-    r"\bgenerate.*report\b",
-]
-
-DATA_SIGNALS = [
-    r"\bexcel\b",
-    r"\bxlsx\b",
-    r"\bcsv\b",
-    r"\bspreadsheet\b",
-    r"\bdata analysis\b",
-    r"\banalyze.*data\b",
-    r"\bstatistics\b",
-    r"\bchart\b",
-    r"\bgraph\b",
+    "plant data",
+    "internal data",
+    "organization data",
 ]
 
 
-def matches_any(query: str, patterns: List[str]) -> bool:
-    return any(re.search(pattern, query, re.IGNORECASE) for pattern in patterns)
+# ============================================================
+# VISION TERMS
+# ============================================================
+
+# Important:
+#
+# We use complete-word matching later.
+#
+# Therefore:
+#
+# "photo" -> matches
+# "photosynthesis" -> does NOT match
+#
+# This prevents:
+#
+#     What is photosynthesis?
+#
+# from being incorrectly classified as a vision task.
+
+VISION_TERMS = [
+
+    "image",
+    "photo",
+    "picture",
+
+    "scan",
+    "scanned",
+
+    "drawing",
+    "diagram",
+    "blueprint",
+    "chart",
+
+    "visual",
+    "handwritten",
+
+    "document image",
+]
 
 
-# ---------------------------------------------------------
-# Main planner
-# ---------------------------------------------------------
+# ============================================================
+# DOCUMENT DRAFTING TERMS
+# ============================================================
 
-def classify_query(
+DRAFTING_TERMS = [
+
+    "approval note",
+    "draft approval",
+
+    "official letter",
+    "draft letter",
+
+    "prepare a report",
+    "generate a report",
+    "create a report",
+    "write a report",
+
+    "generate document",
+    "create document",
+    "prepare document",
+    "draft document",
+]
+
+
+# ============================================================
+# INCIDENT / FAILURE ANALYSIS TERMS
+# ============================================================
+
+INCIDENT_TERMS = [
+
+    "incident",
+    "accident",
+
+    "failure",
+    "fault",
+    "breakdown",
+    "malfunction",
+
+    "root cause",
+    "root-cause",
+
+    "failure analysis",
+    "incident analysis",
+]
+
+
+# ============================================================
+# EXPLICIT CODE EXECUTION TERMS
+# ============================================================
+
+# These are requests to ACTUALLY RUN / EXECUTE code.
+#
+# Merely asking:
+#
+#     "What is Python?"
+#     "What is exception handling?"
+#
+# must NOT reach the sandbox.
+#
+# But:
+#
+#     "Run this Python code"
+#
+# MUST reach the sandbox.
+
+CODE_EXECUTION_TERMS = [
+
+    "run this code",
+    "execute this code",
+
+    "run the code",
+    "execute the code",
+
+    "run the following code",
+    "execute the following code",
+
+    # --------------------------------------------------------
+    # Python-specific execution
+    # --------------------------------------------------------
+
+    "run this python code",
+    "execute this python code",
+
+    "run python code",
+    "execute python code",
+
+    "run the python code",
+    "execute the python code",
+
+    # --------------------------------------------------------
+    # Testing
+    # --------------------------------------------------------
+
+    "test this code",
+    "test the code",
+
+    "test this python code",
+    "test the python code",
+
+    # --------------------------------------------------------
+    # Program execution
+    # --------------------------------------------------------
+
+    "run this program",
+    "execute this program",
+
+    "run the program",
+    "execute the program",
+
+    # --------------------------------------------------------
+    # Output requests
+    # --------------------------------------------------------
+
+    "what is the output of this code",
+    "tell me the output of this code",
+
+    "what is the output of this python code",
+    "tell me the output of this python code",
+
+    # --------------------------------------------------------
+    # Python calculations
+    # --------------------------------------------------------
+
+    "use python to calculate",
+    "calculate using python",
+
+    "execute python",
+    "execute python code",
+
+    "run python",
+    "run python code",
+]
+
+
+# ============================================================
+# NORMAL CODING / PROGRAMMING TERMS
+# ============================================================
+
+# These terms indicate a programming-related question,
+# but NOT necessarily code execution.
+#
+# Example:
+#
+#     "What is Python exception handling?"
+#
+# should remain GENERAL_KNOWLEDGE.
+
+CODING_TERMS = [
+
+    "python",
+
+    "javascript",
+    "typescript",
+
+    "java",
+
+    "c programming",
+    "c++",
+
+    "golang",
+    "rust",
+
+    "programming",
+    "program",
+
+    "code",
+    "coding",
+
+    "function",
+    "class",
+    "variable",
+
+    "loop",
+    "array",
+
+    "dictionary",
+    "list",
+    "tuple",
+
+    "exception",
+    "error handling",
+
+    "debugging",
+
+    "algorithm",
+    "data structure",
+
+    "api",
+
+    "backend",
+    "frontend",
+
+    "fastapi",
+    "flask",
+
+    "react",
+    "next.js",
+]
+
+
+# ============================================================
+# ENGINEERING CALCULATION TERMS
+# ============================================================
+
+ENGINEERING_CALCULATION_TERMS = [
+
+    "calculate pressure",
+    "calculate mawp",
+
+    "safe operating pressure",
+    "operating pressure",
+    "design pressure",
+    "safe pressure",
+
+    "crack depth",
+    "crack penetration",
+    "crack length",
+
+    "vibration measurement",
+    "rms vibration",
+    "vibration level",
+
+    "derating",
+
+    "engineering calculation",
+    "stress calculation",
+    "load calculation",
+    "pressure calculation",
+    "equipment calculation",
+
+    "calculate the pressure",
+    "calculate safe operating",
+]
+
+
+# ============================================================
+# WEB / CURRENT INFORMATION TERMS
+# ============================================================
+
+WEB_RESEARCH_TERMS = [
+
+    "latest",
+    "current",
+    "currently",
+
+    "recent",
+    "recently",
+
+    "today",
+    "this week",
+    "this month",
+    "this year",
+
+    "new developments",
+
+    "latest developments",
+    "latest news",
+    "current news",
+
+    "what happened",
+
+    "as of 2026",
+    "in 2026",
+]
+
+
+# ============================================================
+# TEXT NORMALIZATION
+# ============================================================
+
+def _normalize(text: str) -> str:
+    """
+    Normalize text before matching.
+
+    Example:
+
+        "  RUN   Python   CODE  "
+
+    becomes:
+
+        "run python code"
+    """
+
+    return re.sub(
+        r"\s+",
+        " ",
+        text.lower(),
+    ).strip()
+
+
+# ============================================================
+# SAFE PHRASE MATCHING
+# ============================================================
+
+def _contains_phrase(
+    text: str,
+    phrase: str,
+) -> bool:
+    """
+    Match a complete word or phrase.
+
+    This is important because simple substring matching causes
+    bugs such as:
+
+        "photo" in "photosynthesis"
+
+    which is TRUE with normal substring matching.
+
+    With this function:
+
+        "photo" matches "photo"
+        "photo" does NOT match "photosynthesis"
+    """
+
+    text = _normalize(text)
+    phrase = _normalize(phrase)
+
+    pattern = (
+        r"(?<!\w)"
+        + re.escape(phrase)
+        + r"(?!\w)"
+    )
+
+    return re.search(
+        pattern,
+        text,
+    ) is not None
+
+
+# ============================================================
+# CHECK MULTIPLE TERMS
+# ============================================================
+
+def _contains_any(
+    text: str,
+    terms: list[str],
+) -> bool:
+    """
+    Return True when at least one complete term/phrase
+    appears in the text.
+    """
+
+    return any(
+        _contains_phrase(text, term)
+        for term in terms
+    )
+
+
+# ============================================================
+# WEB RESEARCH DECISION
+# ============================================================
+
+def requires_web_research(
     query: str,
-    has_image_attachment: bool = False
-) -> Tuple[QueryLane, TaskType, str]:
+) -> bool:
+    """
+    Determine whether the user is asking for current/latest
+    information.
+    """
 
-    lower_q = query.lower()
-
-    is_private = (
-        matches_any(lower_q, INDUSTRIAL_SIGNALS)
-        or matches_any(lower_q, PRIVATE_SIGNALS)
+    return _contains_any(
+        query,
+        WEB_RESEARCH_TERMS,
     )
 
-    needs_web = matches_any(lower_q, CURRENT_SIGNALS)
 
-    # Company/private lane takes priority for access control.
-    lane = (
-        QueryLane.LANE_B
-        if is_private
-        else QueryLane.LANE_A
-    )
+# ============================================================
+# LANE CLASSIFICATION
+# ============================================================
 
-    # Capability priority
-    if has_image_attachment or matches_any(lower_q, VISION_SIGNALS):
-        task_type = TaskType.VISION_DOCUMENT
+def classify_lane(
+    query: str,
+) -> tuple[str, str]:
+    """
+    Determine whether the request is:
 
-    elif matches_any(lower_q, DATA_SIGNALS):
-        task_type = TaskType.DATA_ANALYSIS
+        Lane A = general/public
 
-    elif matches_any(lower_q, CODE_SIGNALS):
-        task_type = TaskType.CODE_SANDBOX
+    or:
 
-    elif matches_any(lower_q, DRAFTING_SIGNALS):
-        task_type = TaskType.DELIVERABLE_DRAFTING
+        Lane B = company/private/confidential
+    """
 
-    elif matches_any(lower_q, DOCUMENT_SIGNALS):
-        task_type = (
-            TaskType.PRIVATE_RAG
-            if is_private
-            else TaskType.DOCUMENT_ANALYSIS
+    if _contains_any(
+        query,
+        CONFIDENTIAL_TERMS,
+    ):
+
+        return (
+            QueryLane.LANE_B_COMPANY_CONFIDENTIAL.value,
+
+            "Company/private query. "
+            "Local clearance-filtered RAG is required.",
         )
 
-    elif needs_web:
-        task_type = TaskType.WEB_RESEARCH
+    return (
+        QueryLane.LANE_A_GENERAL.value,
 
-    elif lane == QueryLane.LANE_B:
-        task_type = TaskType.INCIDENT_ANALYSIS
+        "General/public knowledge query. "
+        "Private company RAG is bypassed.",
+    )
 
-    else:
-        task_type = TaskType.GENERAL_KNOWLEDGE
 
-    # Development model for now.
+# ============================================================
+# TASK CLASSIFICATION
+# ============================================================
+
+def classify_task(
+    query: str,
+    has_image: bool = False,
+) -> str:
+    """
+    Determine what type of task the agent needs to perform.
+
+    Priority:
+
+        1. Uploaded image
+        2. Vision request
+        3. Document drafting
+        4. Incident analysis
+        5. Explicit code execution
+        6. Engineering calculation
+        7. Normal programming discussion
+        8. General knowledge
+    """
+
+    # --------------------------------------------------------
+    # 1. Actual uploaded image
+    # --------------------------------------------------------
+
+    if has_image:
+
+        return TaskType.VISION_DOCUMENT.value
+
+
+    # --------------------------------------------------------
+    # 2. Vision / image request
+    # --------------------------------------------------------
+
+    if _contains_any(
+        query,
+        VISION_TERMS,
+    ):
+
+        return TaskType.VISION_DOCUMENT.value
+
+
+    # --------------------------------------------------------
+    # 3. Document generation
+    # --------------------------------------------------------
+
+    if _contains_any(
+        query,
+        DRAFTING_TERMS,
+    ):
+
+        return TaskType.DELIVERABLE_DRAFTING.value
+
+
+    # --------------------------------------------------------
+    # 4. Incident analysis
+    # --------------------------------------------------------
+
+    if _contains_any(
+        query,
+        INCIDENT_TERMS,
+    ):
+
+        return TaskType.INCIDENT_ANALYSIS.value
+
+
+    # --------------------------------------------------------
+    # 5. Explicit code execution
+    # --------------------------------------------------------
+
+    if _contains_any(
+        query,
+        CODE_EXECUTION_TERMS,
+    ):
+
+        return TaskType.CODE_SANDBOX.value
+
+
+    # --------------------------------------------------------
+    # 6. Engineering calculation
+    # --------------------------------------------------------
+
+    if _contains_any(
+        query,
+        ENGINEERING_CALCULATION_TERMS,
+    ):
+
+        return TaskType.CODE_SANDBOX.value
+
+
+    # --------------------------------------------------------
+    # 7. Normal programming question
+    # --------------------------------------------------------
     #
-    # Later we can change this to qwen3-14b
-    # without redesigning the application.
-    model_id = "qwen2.5-3b"
+    # Example:
+    #
+    # "What is Python exception handling?"
+    #
+    # This is a knowledge question.
+    #
+    # It does NOT execute code.
 
-    return lane, task_type, model_id
+    if _contains_any(
+        query,
+        CODING_TERMS,
+    ):
+
+        return TaskType.GENERAL_KNOWLEDGE.value
 
 
-# ---------------------------------------------------------
-# Detailed agent plan
-# ---------------------------------------------------------
+    # --------------------------------------------------------
+    # 8. Default
+    # --------------------------------------------------------
 
-def build_agent_plan(
-    query: str,
-    lane: QueryLane,
-    task_type: TaskType,
-    has_image: bool = False
+    return TaskType.GENERAL_KNOWLEDGE.value
+
+
+# ============================================================
+# MODEL SELECTION
+# ============================================================
+
+def select_model(
+    task_type: str,
+    has_image: bool = False,
 ) -> Dict[str, Any]:
+    """
+    Select the appropriate local model.
 
-    lower_q = query.lower()
+    Current development setup:
 
-    needs_web = matches_any(lower_q, CURRENT_SIGNALS)
+        General → Qwen2.5 General
+        Code → Qwen2.5-Coder
+        Vision → Qwen2.5-VL (future)
 
-    needs_private = (
-        lane == QueryLane.LANE_B
-        or matches_any(lower_q, PRIVATE_SIGNALS)
-        or matches_any(lower_q, INDUSTRIAL_SIGNALS)
-    )
+    Later the actual Ollama model can be changed through
+    configuration without rewriting the router.
+    """
 
-    plan = []
-
-    # Private information
-    if needs_private:
-        plan.append({
-            "agent": "private_knowledge_agent",
-            "purpose": "Retrieve clearance-authorized internal knowledge",
-            "network_access": False
-        })
-
-    # Current public information
-    if needs_web:
-        plan.append({
-            "agent": "web_research_agent",
-            "purpose": "Retrieve current public information",
-            "network_access": True,
-            "privacy_filter_required": True
-        })
-
+    # --------------------------------------------------------
     # Vision
-    if has_image or task_type == TaskType.VISION_DOCUMENT:
-        plan.append({
-            "agent": "vision_agent",
-            "purpose": "Analyze image, scan, drawing or diagram",
-            "network_access": False
-        })
+    # --------------------------------------------------------
 
-    # Code
-    if task_type == TaskType.CODE_SANDBOX:
-        plan.append({
-            "agent": "coding_agent",
-            "purpose": "Generate and verify code in sandbox",
-            "network_access": False
-        })
+    if (
+        has_image
+        or task_type
+        == TaskType.VISION_DOCUMENT.value
+    ):
 
-    # Data
-    if task_type == TaskType.DATA_ANALYSIS:
-        plan.append({
-            "agent": "data_agent",
-            "purpose": "Analyze spreadsheet or structured data",
-            "network_access": False
-        })
-
-    # Documents
-    if task_type in [
-        TaskType.DOCUMENT_ANALYSIS,
-        TaskType.DELIVERABLE_DRAFTING
-    ]:
-        plan.append({
-            "agent": "document_agent",
-            "purpose": "Read and analyze user documents",
-            "network_access": False
-        })
-
-    # Reports
-    if task_type == TaskType.DELIVERABLE_DRAFTING:
-        plan.append({
-            "agent": "report_agent",
-            "purpose": "Generate professional deliverable",
-            "network_access": False
-        })
-
-    # Always verify
-    plan.append({
-        "agent": "verification_agent",
-        "purpose": "Check evidence, calculations and unsupported claims",
-        "network_access": False
-    })
-
-    return {
-        "plan": plan,
-        "requires_web": needs_web,
-        "requires_private_data": needs_private,
-        "privacy_mode": (
-            "CONTROLLED_WEB_RESEARCH"
-            if needs_web
-            else "LOCAL_ONLY"
-        )
-    }
+        return MODEL_REGISTRY[
+            "qwen2.5-vl"
+        ].copy()
 
 
-# ---------------------------------------------------------
-# Public routing API
-# ---------------------------------------------------------
+    # --------------------------------------------------------
+    # Code / calculation
+    # --------------------------------------------------------
+
+    if (
+        task_type
+        == TaskType.CODE_SANDBOX.value
+    ):
+
+        return MODEL_REGISTRY[
+            "qwen2.5-coder"
+        ].copy()
+
+
+    # --------------------------------------------------------
+    # Everything else
+    # --------------------------------------------------------
+
+    return MODEL_REGISTRY[
+        "qwen2.5-general"
+    ].copy()
+
+
+# ============================================================
+# COMPLETE ROUTING INFORMATION
+# ============================================================
 
 def get_routing_info(
     query: str,
-    has_image: bool = False
+    has_image: bool = False,
 ) -> Dict[str, Any]:
+    """
+    Main router entry point.
 
-    lane, task_type, model_id = classify_query(
-        query,
-        has_image
+    Returns all information required by the agent workflow.
+    """
+
+    # --------------------------------------------------------
+    # Lane
+    # --------------------------------------------------------
+
+    lane, lane_description = classify_lane(
+        query
     )
 
-    model_spec = MODEL_REGISTRY[model_id]
 
-    agent_plan = build_agent_plan(
-        query,
-        lane,
-        task_type,
-        has_image
+    # --------------------------------------------------------
+    # Task
+    # --------------------------------------------------------
+
+    task_type = classify_task(
+        query=query,
+        has_image=has_image,
     )
+
+
+    # --------------------------------------------------------
+    # Model
+    # --------------------------------------------------------
+
+    selected_model = select_model(
+        task_type=task_type,
+        has_image=has_image,
+    )
+
+
+    # --------------------------------------------------------
+    # Web requirement
+    # --------------------------------------------------------
+
+    web_required = requires_web_research(
+        query
+    )
+
+
+    # --------------------------------------------------------
+    # Routing explanation
+    # --------------------------------------------------------
+
+    routing_reasons = []
+
+
+    # --------------------------------------------------------
+    # Security lane reason
+    # --------------------------------------------------------
+
+    if (
+        lane
+        == QueryLane.LANE_B_COMPANY_CONFIDENTIAL.value
+    ):
+
+        routing_reasons.append(
+            "confidential/company indicators detected"
+        )
+
+    else:
+
+        routing_reasons.append(
+            "no obvious confidential/company indicators detected"
+        )
+
+
+    # --------------------------------------------------------
+    # Task reason
+    # --------------------------------------------------------
+
+    if (
+        task_type
+        == TaskType.VISION_DOCUMENT.value
+    ):
+
+        routing_reasons.append(
+            "vision/image/document indicators detected"
+        )
+
+    elif (
+        task_type
+        == TaskType.DELIVERABLE_DRAFTING.value
+    ):
+
+        routing_reasons.append(
+            "document drafting indicators detected"
+        )
+
+    elif (
+        task_type
+        == TaskType.INCIDENT_ANALYSIS.value
+    ):
+
+        routing_reasons.append(
+            "incident/failure analysis indicators detected"
+        )
+
+    elif (
+        task_type
+        == TaskType.CODE_SANDBOX.value
+    ):
+
+        routing_reasons.append(
+            "explicit code execution or engineering "
+            "calculation indicators detected"
+        )
+
+    elif _contains_any(
+        query,
+        CODING_TERMS,
+    ):
+
+        routing_reasons.append(
+            "coding/programming discussion detected; "
+            "execution not requested"
+        )
+
+    else:
+
+        routing_reasons.append(
+            "general knowledge query"
+        )
+
+
+    # --------------------------------------------------------
+    # Web reason
+    # --------------------------------------------------------
+
+    if web_required:
+
+        routing_reasons.append(
+            "current/latest information requested"
+        )
+
+
+    # --------------------------------------------------------
+    # Final routing object
+    # --------------------------------------------------------
 
     return {
-        "lane": lane.value,
 
-        "lane_description": (
-            "Lane A: General/Public Knowledge"
-            if lane == QueryLane.LANE_A
-            else
-            "Lane B: Sovereign Confidential / Clearance-Gated"
-        ),
+        "lane": lane,
 
-        "task_type": task_type.value,
+        "lane_description": lane_description,
 
-        "selected_model": {
-            "model_id": model_id,
-            "display_name": model_spec["name"],
-            "role": model_spec["role"],
-            "vram_gb": model_spec["vram_required_gb"],
-            "status": model_spec["status"]
-        },
+        "task_type": task_type,
 
-        "agent_plan": agent_plan["plan"],
+        "selected_model": selected_model,
 
-        "requires_web": agent_plan["requires_web"],
+        "requires_web": web_required,
 
-        "requires_private_data": agent_plan["requires_private_data"],
+        "routing_reasons": routing_reasons,
 
-        "privacy_mode": agent_plan["privacy_mode"]
+        "has_image": has_image,
+    }
+
+
+# ============================================================
+# MODEL INFORMATION
+# ============================================================
+
+def get_available_models() -> Dict[str, Dict[str, Any]]:
+    """
+    Return a copy of the model registry.
+    """
+
+    return {
+        model_id: model.copy()
+        for model_id, model in MODEL_REGISTRY.items()
     }

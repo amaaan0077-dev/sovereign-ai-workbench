@@ -1,4 +1,4 @@
-﻿import React, { useState } from "react";
+import React, { useState } from "react";
 import { Send, Terminal, AlertTriangle, FileText, CornerDownRight, CheckCircle2 } from "lucide-react";
 
 export default function WorkspacePanel({
@@ -24,6 +24,16 @@ export default function WorkspacePanel({
       label: "HERO DEMO: AGENTIC APPROVAL NOTE",
       query: "Draft official approval note for Pump P-102 vibration analysis and calculate MAWP derating for Column CD-01 crack W-14",
       tag: "Agentic // Sandbox + Word .docx"
+    },
+    {
+      label: "CODE SANDBOX + XLSX ANALYSIS",
+      query: "Calculate safe operating pressure and draft analysis report table for Column CD-01 crack W-14 derating",
+      tag: "Code/Engineering // Sandbox + .xlsx"
+    },
+    {
+      label: "WEB RESEARCH + VERIFY",
+      query: "What is the latest ISO 10816 vibration standard for industrial pumps?",
+      tag: "Web Research // Verification Engine"
     }
   ];
 
@@ -182,8 +192,22 @@ export default function WorkspacePanel({
                       </span>
                     </div>
 
-                    <div className="mono" style={{ fontSize: "10px", color: "var(--subsystem-muted)" }}>
-                      LATENCY: {entry.executionTimeMs}ms | EGRESS: 0 BYTES
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <span className="mono" style={{ fontSize: "10px", color: "var(--subsystem-muted)" }}>
+                        LATENCY: {entry.executionTimeMs}ms | EGRESS: 0 BYTES
+                      </span>
+                      {entry.verifyStatus && (
+                        <span className="mono" style={{
+                          fontSize:        "9px",
+                          padding:         "1px 5px",
+                          fontWeight:      700,
+                          color:           entry.verifyStatus === "VALID" ? "var(--verification-cyan)" : "#C23A2A",
+                          border:          `1px solid ${entry.verifyStatus === "VALID" ? "var(--verification-cyan)" : "#C23A2A"}`,
+                          backgroundColor: entry.verifyStatus === "VALID" ? "#0D1F1A" : "#1C1010",
+                        }}>
+                          {entry.verifyStatus === "VALID" ? "✓ VERIFIED" : "⚠ REVIEW"}
+                        </span>
+                      )}
                     </div>
                   </div>
 

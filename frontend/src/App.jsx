@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import TopRail from "./components/TopRail";
 import GroundingPanel from "./components/GroundingPanel";
 import WorkspacePanel from "./components/WorkspacePanel";
@@ -8,23 +8,27 @@ import { fetchNetworkStatus, fetchDocuments, fetchModels, sendChatQuery } from "
 
 export default function App() {
   const [activePersona, setActivePersona] = useState({
-    id: "officer_priya",
-    name: "Priya Nair",
-    role: "Lead Reliability Inspector",
+    id:        "officer_priya",
+    name:      "Priya Nair",
+    role:      "Lead Reliability Inspector",
     clearance: "CONFIDENTIAL",
-    level: 2,
-    color: "#C2782A"
+    level:     2,
+    color:     "#C2782A",
   });
 
-  const [documents, setDocuments] = useState([]);
-  const [models, setModels] = useState({});
-  const [networkStatus, setNetworkStatus] = useState(null);
-  const [conversation, setConversation] = useState([]);
-  const [auditTrace, setAuditTrace] = useState([]);
-  const [deliverableFile, setDeliverableFile] = useState(null);
-  const [lastCitations, setLastCitations] = useState([]);
-  const [latencyMs, setLatencyMs] = useState(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [documents,           setDocuments]          = useState([]);
+  const [models,              setModels]             = useState({});
+  const [networkStatus,       setNetworkStatus]      = useState(null);
+  const [conversation,        setConversation]       = useState([]);
+  const [auditTrace,          setAuditTrace]         = useState([]);
+  const [deliverableFile,     setDeliverableFile]    = useState(null);
+  const [xlsxFile,            setXlsxFile]           = useState(null);
+  const [lastCitations,       setLastCitations]      = useState([]);
+  const [latencyMs,           setLatencyMs]          = useState(null);
+  const [isLoading,           setIsLoading]          = useState(false);
+  const [routing,             setRouting]            = useState(null);
+  const [verificationResult,  setVerificationResult] = useState(null);
+  const [webResearch,         setWebResearch]        = useState(null);
 
   // Initial Load & Polling
   useEffect(() => {
@@ -32,7 +36,7 @@ export default function App() {
       const [docs, mods, net] = await Promise.all([
         fetchDocuments(),
         fetchModels(),
-        fetchNetworkStatus()
+        fetchNetworkStatus(),
       ]);
       setDocuments(docs);
       setModels(mods);
@@ -51,41 +55,52 @@ export default function App() {
     setIsLoading(true);
     const userTimestamp = new Date().toLocaleTimeString();
 
-    // Add User Entry
+    // Reset pipeline state for new query
+    setAuditTrace([]);
+    setVerificationResult(null);
+    setRouting(null);
+    setWebResearch(null);
+    setDeliverableFile(null);
+    setXlsxFile(null);
+    setLastCitations([]);
+
     setConversation(prev => [
       ...prev,
       {
-        type: "user",
-        text: queryText,
-        userName: activePersona.name,
+        type:      "user",
+        text:      queryText,
+        userName:  activePersona.name,
         clearance: activePersona.clearance,
-        timestamp: userTimestamp
-      }
+        timestamp: userTimestamp,
+      },
     ]);
 
     try {
       const result = await sendChatQuery(queryText, activePersona.id, activePersona.level);
-      
+
       setLatencyMs(result.execution_time_ms);
       setAuditTrace(result.audit_trace || []);
-      setDeliverableFile(result.deliverable_file);
+      setDeliverableFile(result.deliverable_file || null);
+      setXlsxFile(result.xlsx_file || null);
       setLastCitations(result.citations || []);
+      setRouting(result.routing || null);
+      setVerificationResult(result.verification_result || null);
+      setWebResearch(result.web_research || null);
 
-      // Add Agent Entry
       setConversation(prev => [
         ...prev,
         {
-          type: "agent",
-          response: result.response,
-          lane: result.routing?.lane,
-          model: result.routing?.selected_model?.display_name,
-          citations: result.citations || [],
+          type:            "agent",
+          response:        result.response,
+          lane:            result.routing?.lane,
+          model:           result.routing?.selected_model?.display_name,
+          citations:       result.citations || [],
           executionTimeMs: result.execution_time_ms,
-          timestamp: new Date().toLocaleTimeString()
-        }
+          timestamp:       new Date().toLocaleTimeString(),
+          verifyStatus:    result.verification_result?.status,
+        },
       ]);
 
-      // Update Network Status from response
       if (result.network_security) {
         setNetworkStatus(result.network_security);
       }
@@ -93,14 +108,14 @@ export default function App() {
       setConversation(prev => [
         ...prev,
         {
-          type: "agent",
-          response: `[ERROR] On-premise agent execution halted: ${error.message}`,
-          lane: "SYSTEM_ERROR",
-          model: "Local Guardrail",
-          citations: [],
+          type:            "agent",
+          response:        `[ERROR] On-premise agent execution halted: ${error.message}`,
+          lane:            "SYSTEM_ERROR",
+          model:           "Local Guardrail",
+          citations:       [],
           executionTimeMs: 0,
-          timestamp: new Date().toLocaleTimeString()
-        }
+          timestamp:       new Date().toLocaleTimeString(),
+        },
       ]);
     } finally {
       setIsLoading(false);
@@ -133,12 +148,17 @@ export default function App() {
           onSubmitQuery={handleSubmitQuery}
         />
 
-        {/* Right Column: Hero Deliverable & Network Audit */}
+        {/* Right Column: Pipeline + Provenance + Network Audit */}
         <AuditProvenancePanel
           auditTrace={auditTrace}
           deliverableFile={deliverableFile}
+          xlsxFile={xlsxFile}
           networkStatus={networkStatus}
           lastCitations={lastCitations}
+          routing={routing}
+          verificationResult={verificationResult}
+          webResearch={webResearch}
+          isLoading={isLoading}
         />
       </div>
 
